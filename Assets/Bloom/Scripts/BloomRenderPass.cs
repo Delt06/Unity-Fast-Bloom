@@ -9,7 +9,6 @@ namespace PostEffects
 	{
 		private static readonly int BloomTargetId = Shader.PropertyToID("_BloomTarget");
 		private static readonly int CameraColorTextureId = Shader.PropertyToID("_CameraColorTexture");
-		private static readonly int CameraColorTextureTempId = Shader.PropertyToID("_CameraColorTextureTemp");
 		private Bloom _bloom;
 		private RenderTextureDescriptor _bloomTargetDescriptor;
 		private Vector2Int _bloomTargetResolution;
@@ -78,7 +77,6 @@ namespace PostEffects
 		public override void FrameCleanup(CommandBuffer cmd)
 		{
 			cmd.ReleaseTemporaryRT(BloomTargetId);
-			cmd.ReleaseTemporaryRT(CameraColorTextureTempId);
 		}
 
 		public override void Execute(ScriptableRenderContext context, ref RenderingData renderingData)
