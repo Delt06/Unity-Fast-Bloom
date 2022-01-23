@@ -13,13 +13,20 @@ namespace PostEffects
 		private Bloom _bloom;
 		private RenderTextureDescriptor _bloomTargetDescriptor;
 		private Vector2Int _bloomTargetResolution;
-		private RenderTextureDescriptor _cameraTargetDescriptor;
+
+		private RenderTexture _cameraTempTexture;
 		private BloomSettings _settings;
 
 		public void Dispose()
 		{
 			_bloom?.Dispose();
 			_bloom = null;
+
+			if (_cameraTempTexture)
+			{
+				RenderTexture.ReleaseTemporary(_cameraTempTexture);
+				_cameraTempTexture = null;
+			}
 		}
 
 		public void SetUp(BloomSettings settings)
@@ -38,14 +45,38 @@ namespace PostEffects
 			_bloomTargetResolution = RenderTextureUtils.GetScreenResolution(_settings.Resolution);
 			_bloomTargetDescriptor =
 				new RenderTextureDescriptor(_bloomTargetResolution.x, _bloomTargetResolution.y, Ext.argbHalf, 0, 0);
-			_cameraTargetDescriptor = renderingData.cameraData.cameraTargetDescriptor;
 		}
 
 		public override void Configure(CommandBuffer cmd, RenderTextureDescriptor cameraTextureDescriptor)
 		{
 			// TODO: figure a way to set TextureWrapMode.Clamp
 			cmd.GetTemporaryRT(BloomTargetId, _bloomTargetDescriptor, FilterMode.Bilinear);
-			cmd.GetTemporaryRT(CameraColorTextureTempId, _cameraTargetDescriptor);
+			EnsureCameraTempTextureIsCreated(cameraTextureDescriptor);
+		}
+
+		private void EnsureCameraTempTextureIsCreated(in RenderTextureDescriptor cameraTextureDescriptor)
+		{
+			var needToGet = false;
+			if (_cameraTempTexture == null)
+			{
+				needToGet = true;
+			}
+			else if (
+				_cameraTempTexture.width != cameraTextureDescriptor.width ||
+				_cameraTempTexture.height != cameraTextureDescriptor.height ||
+				_cameraTempTexture.format != cameraTextureDescriptor.colorFormat
+			)
+			{
+				RenderTexture.ReleaseTemporary(_cameraTempTexture);
+				needToGet = true;
+			}
+
+			if (!needToGet) return;
+
+			var desc = cameraTextureDescriptor;
+			desc.depthBufferBits = 0;
+			desc.mipCount = 0;
+			_cameraTempTexture = RenderTexture.GetTemporary(desc);
 		}
 
 		public override void FrameCleanup(CommandBuffer cmd)
@@ -61,12 +92,12 @@ namespace PostEffects
 
 			var cmd = CommandBufferPool.Get("Bloom");
 			cmd.Clear();
-			cmd.Blit(CameraColorTextureId, CameraColorTextureTempId);
+			cmd.Blit(CameraColorTextureId, _cameraTempTexture);
 
-			_bloom.Apply(cmd, CameraColorTextureTempId, BloomTargetId, _bloomTargetResolution,
+			_bloom.Apply(cmd, _cameraTempTexture, BloomTargetId, _bloomTargetResolution,
 				renderingData.cameraData.cameraTargetDescriptor.colorFormat
 			);
-			_bloom.Combine(cmd, CameraColorTextureTempId, CameraColorTextureId, BloomTargetId, _settings.Noise);
+			_bloom.Combine(cmd, _cameraTempTexture, CameraColorTextureId, BloomTargetId, _settings.Noise);
 
 			context.ExecuteCommandBuffer(cmd);
 			cmd.Clear();
