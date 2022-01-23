@@ -24,10 +24,10 @@ namespace PostEffects
 			_settings = settings;
 			_bloom ??= new Bloom(settings.Shader);
 
-			_bloom.iterations = _settings.Iterations;
-			_bloom.intensity = _settings.Intensity;
-			_bloom.threshold = _settings.Threshold;
-			_bloom.softKnee = _settings.SoftKnee;
+			_bloom.Iterations = _settings.Iterations;
+			_bloom.Intensity = _settings.Intensity;
+			_bloom.Threshold = _settings.Threshold;
+			_bloom.SoftKnee = _settings.SoftKnee;
 		}
 
 		public override void Execute(ScriptableRenderContext context, ref RenderingData renderingData)
@@ -48,6 +48,7 @@ namespace PostEffects
 				renderingData.cameraData.cameraTargetDescriptor.colorFormat
 			);
 			_bloom.Combine(cmd, _cameraColorTextureTempId, _cameraColorTextureId, _bloomTargetId, _settings.Noise);
+			_bloom.ReleaseBuffers(cmd);
 
 
 			cmd.ReleaseTemporaryRT(_bloomTargetId);
