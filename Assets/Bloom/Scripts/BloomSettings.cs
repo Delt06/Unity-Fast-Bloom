@@ -9,7 +9,7 @@ namespace PostEffects
 		public Shader Shader;
 		public Texture2D Noise;
 
-		[Header("Settings"), Range(256, 1024)]
+		[Header("Settings"), Range(64, 1024)]
 		 public int Resolution = 512;
 		[Range(2, 8)] public int Iterations = 8;
 		[Range(0, 10)] public float Intensity = 0.8f;
