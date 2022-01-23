@@ -18,6 +18,8 @@ namespace PostEffects
 
 		public override void AddRenderPasses(ScriptableRenderer renderer, ref RenderingData renderingData)
 		{
+			if (renderingData.cameraData.cameraType != CameraType.Game) return;
+
 			_pass.SetUp(_settings);
 			renderer.EnqueuePass(_pass);
 		}

@@ -7,10 +7,13 @@ namespace PostEffects
 {
 	public class BloomRenderPass : ScriptableRenderPass, IDisposable
 	{
-		private readonly int _bloomTargetId = Shader.PropertyToID("_BloomTarget");
-		private readonly int _cameraColorTextureId = Shader.PropertyToID("_CameraColorTexture");
-		private readonly int _cameraColorTextureTempId = Shader.PropertyToID("_CameraColorTextureTemp");
+		private static readonly int BloomTargetId = Shader.PropertyToID("_BloomTarget");
+		private static readonly int CameraColorTextureId = Shader.PropertyToID("_CameraColorTexture");
+		private static readonly int CameraColorTextureTempId = Shader.PropertyToID("_CameraColorTextureTemp");
 		private Bloom _bloom;
+		private RenderTextureDescriptor _bloomTargetDescriptor;
+		private Vector2Int _bloomTargetResolution;
+		private RenderTextureDescriptor _cameraTargetDescriptor;
 		private BloomSettings _settings;
 
 		public void Dispose()
@@ -30,31 +33,44 @@ namespace PostEffects
 			_bloom.SoftKnee = _settings.SoftKnee;
 		}
 
+		public override void OnCameraSetup(CommandBuffer cmd, ref RenderingData renderingData)
+		{
+			_bloomTargetResolution = RenderTextureUtils.GetScreenResolution(_settings.Resolution);
+			_bloomTargetDescriptor =
+				new RenderTextureDescriptor(_bloomTargetResolution.x, _bloomTargetResolution.y, Ext.argbHalf, 0, 0);
+			_cameraTargetDescriptor = renderingData.cameraData.cameraTargetDescriptor;
+		}
+
+		public override void Configure(CommandBuffer cmd, RenderTextureDescriptor cameraTextureDescriptor)
+		{
+			// TODO: figure a way to set TextureWrapMode.Clamp
+			cmd.GetTemporaryRT(BloomTargetId, _bloomTargetDescriptor, FilterMode.Bilinear);
+			cmd.GetTemporaryRT(CameraColorTextureTempId, _cameraTargetDescriptor);
+		}
+
+		public override void FrameCleanup(CommandBuffer cmd)
+		{
+			_bloom.ReleaseBuffers(cmd);
+			cmd.ReleaseTemporaryRT(BloomTargetId);
+			cmd.ReleaseTemporaryRT(CameraColorTextureTempId);
+		}
+
 		public override void Execute(ScriptableRenderContext context, ref RenderingData renderingData)
 		{
 			if (renderingData.cameraData.cameraType != CameraType.Game) return;
 
-			var res = RenderTextureUtils.GetScreenResolution(_settings.Resolution);
-			var cmd = CommandBufferPool.Get();
+			var cmd = CommandBufferPool.Get("Bloom");
 			cmd.Clear();
+			cmd.Blit(CameraColorTextureId, CameraColorTextureTempId);
 
-			var desc = new RenderTextureDescriptor(res.x, res.y, Ext.argbHalf, 0, 0);
-			cmd.GetTemporaryRT(_bloomTargetId, desc, FilterMode.Bilinear
-			); // TODO: figure a way to set TextureWrapMode.Clamp
-			cmd.GetTemporaryRT(_cameraColorTextureTempId, renderingData.cameraData.cameraTargetDescriptor);
-			cmd.Blit(_cameraColorTextureId, _cameraColorTextureTempId);
-
-			_bloom.Apply(cmd, _cameraColorTextureTempId, _bloomTargetId, res,
+			_bloom.Apply(cmd, CameraColorTextureTempId, BloomTargetId, _bloomTargetResolution,
 				renderingData.cameraData.cameraTargetDescriptor.colorFormat
 			);
-			_bloom.Combine(cmd, _cameraColorTextureTempId, _cameraColorTextureId, _bloomTargetId, _settings.Noise);
-			_bloom.ReleaseBuffers(cmd);
+			_bloom.Combine(cmd, CameraColorTextureTempId, CameraColorTextureId, BloomTargetId, _settings.Noise);
 
-
-			cmd.ReleaseTemporaryRT(_bloomTargetId);
-			cmd.ReleaseTemporaryRT(_cameraColorTextureTempId);
 			context.ExecuteCommandBuffer(cmd);
 			cmd.Clear();
+
 			CommandBufferPool.Release(cmd);
 		}
 	}
