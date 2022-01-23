@@ -60,11 +60,7 @@ namespace PostEffects
 			{
 				needToGet = true;
 			}
-			else if (
-				_cameraTempTexture.width != cameraTextureDescriptor.width ||
-				_cameraTempTexture.height != cameraTextureDescriptor.height ||
-				_cameraTempTexture.format != cameraTextureDescriptor.colorFormat
-			)
+			else if (!Ext.MainDescParametersMatch(_cameraTempTexture.descriptor, cameraTextureDescriptor))
 			{
 				RenderTexture.ReleaseTemporary(_cameraTempTexture);
 				needToGet = true;
