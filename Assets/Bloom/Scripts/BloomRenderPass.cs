@@ -7,12 +7,12 @@ namespace PostEffects
 {
 	public class BloomRenderPass : ScriptableRenderPass, IDisposable
 	{
-		private static readonly int BloomTargetId = Shader.PropertyToID("_BloomTarget");
 		private static readonly int CameraColorTextureId = Shader.PropertyToID("_CameraColorTexture");
 		private Bloom _bloom;
 		private RenderTextureDescriptor _bloomTargetDescriptor;
 		private Vector2Int _bloomTargetResolution;
 
+		private RenderTexture _bloomTargetTexture;
 		private RenderTexture _cameraTempTexture;
 		private BloomSettings _settings;
 
@@ -25,6 +25,12 @@ namespace PostEffects
 			{
 				RenderTexture.ReleaseTemporary(_cameraTempTexture);
 				_cameraTempTexture = null;
+			}
+
+			if (_bloomTargetTexture)
+			{
+				RenderTexture.ReleaseTemporary(_bloomTargetTexture);
+				_bloomTargetTexture = null;
 			}
 		}
 
@@ -48,9 +54,27 @@ namespace PostEffects
 
 		public override void Configure(CommandBuffer cmd, RenderTextureDescriptor cameraTextureDescriptor)
 		{
-			// TODO: optimize to RenderTexture.GetTemporary
-			cmd.GetTemporaryRT(BloomTargetId, _bloomTargetDescriptor, FilterMode.Bilinear);
+			EnsureBloomTargetIsCreated(_bloomTargetDescriptor);
 			EnsureCameraTempTextureIsCreated(cameraTextureDescriptor);
+		}
+
+		private void EnsureBloomTargetIsCreated(in RenderTextureDescriptor descriptor)
+		{
+			var needToGet = false;
+			if (_bloomTargetTexture == null)
+			{
+				needToGet = true;
+			}
+			else if (_bloomTargetTexture.width != descriptor.width || _bloomTargetTexture.height != descriptor.height)
+			{
+				RenderTexture.ReleaseTemporary(_bloomTargetTexture);
+				needToGet = true;
+			}
+
+			if (!needToGet) return;
+
+			_bloomTargetTexture = RenderTexture.GetTemporary(descriptor);
+			_bloomTargetTexture.filterMode = FilterMode.Bilinear;
 		}
 
 		private void EnsureCameraTempTextureIsCreated(in RenderTextureDescriptor cameraTextureDescriptor)
@@ -74,11 +98,6 @@ namespace PostEffects
 			_cameraTempTexture = RenderTexture.GetTemporary(desc);
 		}
 
-		public override void FrameCleanup(CommandBuffer cmd)
-		{
-			cmd.ReleaseTemporaryRT(BloomTargetId);
-		}
-
 		public override void Execute(ScriptableRenderContext context, ref RenderingData renderingData)
 		{
 			if (renderingData.cameraData.cameraType != CameraType.Game) return;
@@ -87,10 +106,10 @@ namespace PostEffects
 			cmd.Clear();
 			cmd.Blit(CameraColorTextureId, _cameraTempTexture);
 
-			_bloom.Apply(cmd, _cameraTempTexture, BloomTargetId, _bloomTargetResolution,
+			_bloom.Apply(cmd, _cameraTempTexture, _bloomTargetTexture, _bloomTargetResolution,
 				renderingData.cameraData.cameraTargetDescriptor
 			);
-			_bloom.Combine(cmd, _cameraTempTexture, CameraColorTextureId, BloomTargetId, _settings.Noise);
+			_bloom.Combine(cmd, _cameraTempTexture, CameraColorTextureId, _bloomTargetTexture, _settings.Noise);
 
 			context.ExecuteCommandBuffer(cmd);
 			cmd.Clear();
