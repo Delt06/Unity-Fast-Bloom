@@ -49,7 +49,6 @@ namespace PostEffects
 
 		public override void Configure(CommandBuffer cmd, RenderTextureDescriptor cameraTextureDescriptor)
 		{
-			// TODO: figure a way to set TextureWrapMode.Clamp
 			cmd.GetTemporaryRT(BloomTargetId, _bloomTargetDescriptor, FilterMode.Bilinear);
 			EnsureCameraTempTextureIsCreated(cameraTextureDescriptor);
 		}
