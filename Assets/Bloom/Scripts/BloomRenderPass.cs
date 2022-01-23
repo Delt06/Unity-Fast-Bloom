@@ -49,6 +49,7 @@ namespace PostEffects
 
 		public override void Configure(CommandBuffer cmd, RenderTextureDescriptor cameraTextureDescriptor)
 		{
+			// TODO: optimize to RenderTexture.GetTemporary
 			cmd.GetTemporaryRT(BloomTargetId, _bloomTargetDescriptor, FilterMode.Bilinear);
 			EnsureCameraTempTextureIsCreated(cameraTextureDescriptor);
 		}
@@ -76,7 +77,6 @@ namespace PostEffects
 
 		public override void FrameCleanup(CommandBuffer cmd)
 		{
-			_bloom.ReleaseBuffers(cmd);
 			cmd.ReleaseTemporaryRT(BloomTargetId);
 			cmd.ReleaseTemporaryRT(CameraColorTextureTempId);
 		}
@@ -90,7 +90,7 @@ namespace PostEffects
 			cmd.Blit(CameraColorTextureId, _cameraTempTexture);
 
 			_bloom.Apply(cmd, _cameraTempTexture, BloomTargetId, _bloomTargetResolution,
-				renderingData.cameraData.cameraTargetDescriptor.colorFormat
+				renderingData.cameraData.cameraTargetDescriptor
 			);
 			_bloom.Combine(cmd, _cameraTempTexture, CameraColorTextureId, BloomTargetId, _settings.Noise);
 

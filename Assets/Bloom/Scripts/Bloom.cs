@@ -20,8 +20,8 @@ namespace PostEffects
 		private static readonly int TexelSizeId = Shader.PropertyToID("_TexelSize");
 		private static readonly int ThresholdId = Shader.PropertyToID("_Threshold");
 
-		private readonly List<int> _bloomBufferIds = new List<int>();
-		private readonly List<Buffer> _buffers = new List<Buffer>();
+		private readonly List<RenderTexture> _buffers = new List<RenderTexture>();
+		private BufferParams? _bufferParams;
 
 		private bool _initialized;
 		private Material _material;
@@ -39,6 +39,7 @@ namespace PostEffects
 		public void Dispose()
 		{
 			CoreUtils.Destroy(_material);
+			ReleaseBuffers();
 		}
 
 		private void Init()
@@ -51,12 +52,12 @@ namespace PostEffects
 		}
 
 		public void Apply(CommandBuffer cmd, RenderTargetIdentifier source, RenderTargetIdentifier destination,
-			Vector2Int resolution, RenderTextureFormat destinationFormat)
+			Vector2Int resolution, RenderTextureDescriptor destinationDescriptor)
 		{
 			Init();
 			if (!_initialized) return;
 
-			AllocateBuffers(cmd, resolution, destinationFormat);
+			EnsureBuffersAreAllocated(resolution, destinationDescriptor);
 
 			cmd.SetGlobalFloat(ThresholdId, Threshold);
 			var knee = Mathf.Max(Threshold * SoftKnee, 0.0001f);
@@ -73,16 +74,24 @@ namespace PostEffects
 			foreach (var dest in _buffers)
 			{
 				cmd.SetGlobalVector(TexelSizeId, last.TexelSize);
-				cmd.Blit(last.Id, dest.Id, _material, DownsamplePass);
-				last = dest;
+				cmd.Blit(last.Id, dest, _material, DownsamplePass);
+				last = new Buffer
+				{
+					Id = dest,
+					TexelSize = dest.texelSize,
+				};
 			}
 
 			for (var i = _buffers.Count - 2; i >= 0; i--)
 			{
 				var dest = _buffers[i];
 				cmd.SetGlobalVector(TexelSizeId, last.TexelSize);
-				cmd.Blit(last.Id, dest.Id, _material, UpsamplePass);
-				last = dest;
+				cmd.Blit(last.Id, dest, _material, UpsamplePass);
+				last = new Buffer
+				{
+					Id = dest,
+					TexelSize = dest.texelSize,
+				};
 			}
 
 			cmd.SetGlobalFloat(IntensityId, Intensity);
@@ -92,10 +101,29 @@ namespace PostEffects
 
 		private static Vector2 GetTexelSize(Vector2Int resolution) => new Vector2(1f / resolution.x, 1f / resolution.y);
 
-		private void AllocateBuffers(CommandBuffer cmd, Vector2Int resolution, RenderTextureFormat destinationFormat)
+		private void EnsureBuffersAreAllocated(Vector2Int resolution, in RenderTextureDescriptor destinationDescriptor)
 		{
-			_buffers.Clear();
+			var needToAllocate = false;
 
+			if (_bufferParams == null)
+			{
+				needToAllocate = true;
+			}
+			else
+			{
+				var bufferParams = _bufferParams.Value;
+				if (bufferParams.Iterations != Iterations ||
+				    bufferParams.Resolution != resolution ||
+				    !Ext.MainDescParametersMatch(bufferParams.DestinationDescriptor, destinationDescriptor))
+				{
+					ReleaseBuffers();
+					needToAllocate = true;
+				}
+			}
+
+			if (!needToAllocate) return;
+
+			_buffers.Clear();
 			for (var i = 0; i < Iterations; i++)
 			{
 				var w = resolution.x >> (i + 1);
@@ -103,36 +131,28 @@ namespace PostEffects
 
 				if (w < 2 || h < 2) break;
 
-				var id = GetBufferId(i);
-				cmd.GetTemporaryRT(id, w, h, 0, FilterMode.Bilinear, destinationFormat);
-				_buffers.Add(new Buffer
-					{
-						Id = id,
-						TexelSize = GetTexelSize(new Vector2Int(w, h)),
-					}
-				);
+				var desc = new RenderTextureDescriptor(w, h, destinationDescriptor.colorFormat, 0, 0);
+				var rt = RenderTexture.GetTemporary(desc);
+				rt.filterMode = FilterMode.Bilinear;
+				_buffers.Add(rt);
 			}
+
+			_bufferParams = new BufferParams
+			{
+				Iterations = Iterations,
+				DestinationDescriptor = destinationDescriptor,
+				Resolution = resolution,
+			};
 		}
 
-		public void ReleaseBuffers(CommandBuffer cmd)
+		private void ReleaseBuffers()
 		{
-			for (var index = 0; index < _buffers.Count; index++)
+			foreach (var buffer in _buffers)
 			{
-				var id = GetBufferId(index);
-				cmd.ReleaseTemporaryRT(id);
+				RenderTexture.ReleaseTemporary(buffer);
 			}
 
 			_buffers.Clear();
-		}
-
-		private int GetBufferId(int index)
-		{
-			while (index >= _bloomBufferIds.Count)
-			{
-				_bloomBufferIds.Add(Shader.PropertyToID($"_BloomBuffer{_bloomBufferIds.Count}"));
-			}
-
-			return _bloomBufferIds[index];
 		}
 
 		public void Combine(CommandBuffer cmd, RenderTargetIdentifier source, RenderTargetIdentifier destination,
@@ -154,6 +174,13 @@ namespace PostEffects
 		{
 			public RenderTargetIdentifier Id;
 			public Vector2 TexelSize;
+		}
+
+		private struct BufferParams
+		{
+			public Vector2Int Resolution;
+			public int Iterations;
+			public RenderTextureDescriptor DestinationDescriptor;
 		}
 	}
 }
