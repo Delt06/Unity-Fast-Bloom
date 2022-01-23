@@ -1,165 +1,137 @@
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.Rendering;
 
 namespace PostEffects
 {
-    public class Bloom
-    {
-        public Bloom (Shader shader)
-        {
-            this.shader = shader;
-        }
+	public class Bloom
+	{
+		private const int PREFILTER = 0;
+		private const int DOWNSAMPLE = 1;
+		private const int UPSAMPLE = 2;
+		private const int FINAL = 3;
+		private const int COMBINE = 4;
+		private readonly int _Curve = Shader.PropertyToID("_Curve");
+		private readonly int _Intensity = Shader.PropertyToID("_Intensity");
+		private readonly int _NoiseTex = Shader.PropertyToID("_NoiseTex");
+		private readonly int _NoiseTexScale = Shader.PropertyToID("_NoiseTexScale");
+		private readonly int _SourceTex = Shader.PropertyToID("_SourceTex");
 
-        int mIterations = 8;
-        public int iterations
-        {
-            get { return mIterations; }
-            set
-            {
-                if (value != mIterations)
-                    needResize = true;
-                mIterations = value;
-            }
-        }
+		private readonly int _Threshold = Shader.PropertyToID("_Threshold");
+		private readonly List<int> bloomBufferIds = new List<int>();
+		private readonly List<int> buffers = new List<int>();
 
-        public float intensity = 0.8f;
-        public float threshold = 0.6f;
-        public float softKnee = 0.7f;
+		private bool inited;
 
-        bool inited = false;
+		public float intensity = 0.8f;
 
-        Material material;
-        Shader shader;
-        List<RenderTexture> buffers = new List<RenderTexture>();
-        Vector2Int currentResolution;
-        bool needResize = true;
+		private Material material;
 
-        int _Threshold = Shader.PropertyToID("_Threshold");
-        int _Curve = Shader.PropertyToID("_Curve");
-        int _TexelSize = Shader.PropertyToID("_TexelSize");
-        int _Intensity = Shader.PropertyToID("_Intensity");
-        int _SourceTex = Shader.PropertyToID("_SourceTex");
-        int _NoiseTex = Shader.PropertyToID("_NoiseTex");
-        int _NoiseTexScale = Shader.PropertyToID("_NoiseTexScale");
+		private int mIterations = 8;
+		private Shader shader;
+		public float softKnee = 0.7f;
+		public float threshold = 0.6f;
 
-        const int PREFILTER = 0;
-        const int DOWNSAMPLE = 1;
-        const int UPSAMPLE = 2;
-        const int FINAL = 3;
-        const int COMBINE = 4;
+		public Bloom(Shader shader) => this.shader = shader;
 
-        public void Dispose ()
-        {
-            foreach (var rt in buffers)
-            {
-                rt.Release();
-                DestroyFunc(rt);
-            }
-            DestroyFunc(material);
-        }
+		public int iterations
+		{
+			get => mIterations;
+			set
+			{
+				if (value != mIterations) { }
 
-        void Init ()
-        {
-            if (inited) return;
-            if (shader == null) return;
-            inited = true;
-            material = CreateMaterial(shader);
-            shader = null;
-        }
+				mIterations = value;
+			}
+		}
 
-        public void Apply (RenderTexture source, RenderTexture destination, Vector2Int resolution)
-        {
-            Init();
-            if (!inited) return;
+		public void Dispose()
+		{
+			CoreUtils.Destroy(material);
+		}
 
-            if (currentResolution != resolution)
-            {
-                currentResolution = resolution;
-                needResize = true;
-            }
+		private void Init()
+		{
+			if (inited) return;
+			if (shader == null) return;
+			inited = true;
+			material = CreateMaterial(shader);
+			shader = null;
+		}
 
-            if (needResize)
-            {
-                needResize = false;
-                Resize(destination);
-            }
+		public void Apply(CommandBuffer cmd, RenderTargetIdentifier source, RenderTargetIdentifier destination,
+			Vector2Int resolution, RenderTextureFormat destinationFormat)
+		{
+			Init();
+			if (!inited) return;
 
-            if (buffers.Count < 2) return;
+			buffers.Clear();
 
-            material.SetFloat(_Threshold, threshold);
-            var knee = Mathf.Max(threshold * softKnee, 0.0001f);
-            var curve = new Vector3(threshold - knee, knee * 2, 0.25f / knee);
-            material.SetVector(_Curve, curve);
+			for (var i = 0; i < iterations; i++)
+			{
+				var w = resolution.x >> (i + 1);
+				var h = resolution.y >> (i + 1);
 
-            var last = destination;
-            Graphics.Blit(source, last, material, PREFILTER);
+				if (w < 2 || h < 2) break;
 
-            foreach (var dest in buffers)
-            {
-                material.SetVector(_TexelSize, last.texelSize);
-                Graphics.Blit(last, dest, material, DOWNSAMPLE);
-                last = dest;
-            }
+				var id = GetBufferId(i);
+				cmd.GetTemporaryRT(id, w, h, 0, FilterMode.Bilinear, destinationFormat);
+				buffers.Add(id);
+			}
 
-            for (int i = buffers.Count - 2; i >= 0; i--)
-            {
-                var dest = buffers[i];
-                material.SetVector(_TexelSize, last.texelSize);
-                Graphics.Blit(last, dest, material, UPSAMPLE);
-                last.DiscardContents();
-                last = dest;
-            }
+			cmd.SetGlobalFloat(_Threshold, threshold);
+			var knee = Mathf.Max(threshold * softKnee, 0.0001f);
+			var curve = new Vector3(threshold - knee, knee * 2, 0.25f / knee);
+			cmd.SetGlobalVector(_Curve, curve);
 
-            material.SetFloat(_Intensity, intensity);
-            material.SetVector(_TexelSize, last.texelSize);
-            Graphics.Blit(last, destination, material, FINAL);
-            last.DiscardContents();
-        }
+			var last = destination;
+			cmd.Blit(source, last, material, PREFILTER);
 
-        public void Combine (RenderTexture source, RenderTexture destination, RenderTexture bloom, Texture2D noise)
-        {
-            material.SetTexture(_SourceTex, source);
-            material.SetTexture(_NoiseTex, noise);
-            material.SetVector(_NoiseTexScale, RenderTextureUtils.GetTextureScreenScale(noise));
-            Graphics.Blit(bloom, destination, material, COMBINE);
-        }
+			foreach (var dest in buffers)
+			{
+				cmd.Blit(last, dest, material, DOWNSAMPLE);
+				last = dest;
+			}
 
-        void Resize (RenderTexture target)
-        {
-            foreach (var rt in buffers)
-            {
-                rt.Release();
-                DestroyFunc(rt);
-            }
-            buffers.Clear();
+			for (var i = buffers.Count - 2; i >= 0; i--)
+			{
+				var dest = buffers[i];
+				cmd.Blit(last, dest, material, UPSAMPLE);
+				last = dest;
+			}
 
-            for (int i = 0; i < iterations; i++)
-            {
-                int w = target.width >> (i + 1);
-                int h = target.height >> (i + 1);
+			cmd.SetGlobalFloat(_Intensity, intensity);
+			cmd.Blit(last, destination, material, FINAL);
 
-                if (w < 2 || h < 2) break;
+			foreach (var id in buffers)
+			{
+				cmd.ReleaseTemporaryRT(id);
+			}
+		}
 
-                var rt = new RenderTexture(w, h, 0, target.format);
-                rt.filterMode = FilterMode.Bilinear;
-                rt.wrapMode = target.wrapMode;
-                buffers.Add(rt);
-            }
-        }
+		private int GetBufferId(int index)
+		{
+			while (index >= bloomBufferIds.Count)
+			{
+				bloomBufferIds.Add(Shader.PropertyToID($"_BloomBuffer{bloomBufferIds.Count}"));
+			}
 
-        void DestroyFunc (Object obj)
-        {
-            if (Application.isPlaying)
-                Object.Destroy(obj);
-            else
-                Object.DestroyImmediate(obj);
-        }
+			return bloomBufferIds[index];
+		}
 
-        Material CreateMaterial (Shader shader)
-        {
-            var material = new Material(shader);
-            material.hideFlags = HideFlags.HideAndDontSave;
-            return material;
-        }
-    }
+		public void Combine(CommandBuffer cmd, RenderTargetIdentifier source, RenderTargetIdentifier destination,
+			RenderTargetIdentifier bloom, Texture2D noise)
+		{
+			cmd.SetGlobalTexture(_NoiseTex, noise);
+			cmd.SetGlobalVector(_NoiseTexScale, RenderTextureUtils.GetTextureScreenScale(noise));
+			cmd.SetGlobalTexture(_SourceTex, source);
+			cmd.Blit(bloom, destination, material, COMBINE);
+		}
+
+		private static Material CreateMaterial(Shader s) =>
+			new Material(s)
+			{
+				hideFlags = HideFlags.HideAndDontSave,
+			};
+	}
 }

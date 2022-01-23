@@ -3,8 +3,6 @@ Shader "Hidden/Bloom"
     Properties
     {
         _MainTex ("Bloom", 2D) = "black" {}
-        _SourceTex ("Source", 2D) = "black" {}
-        _NoiseTex ("Noise", 2D) = "grey" {}
     }
 
     SubShader
@@ -37,7 +35,7 @@ Shader "Hidden/Bloom"
         sampler2D_half _MainTex;
         sampler2D_half _SourceTex;
         sampler2D_half _NoiseTex;
-        float2 _TexelSize;
+        float4 _SourceTex_TexelSize;
         float _Intensity;
         float _Threshold;
         float3 _Curve;
@@ -73,10 +71,10 @@ Shader "Hidden/Bloom"
             OUT.vertex = UnityObjectToClipPos(IN.vertex);
 
             OUT.uv = IN.uv;
-            OUT.neighbours[0] = IN.uv - float2(_TexelSize.x, 0.0);
-            OUT.neighbours[1] = IN.uv + float2(_TexelSize.x, 0.0);
-            OUT.neighbours[2] = IN.uv - float2(0.0, _TexelSize.y);
-            OUT.neighbours[3] = IN.uv + float2(0.0, _TexelSize.y);
+            OUT.neighbours[0] = IN.uv - float2(_SourceTex_TexelSize.x, 0.0);
+            OUT.neighbours[1] = IN.uv + float2(_SourceTex_TexelSize.x, 0.0);
+            OUT.neighbours[2] = IN.uv - float2(0.0, _SourceTex_TexelSize.y);
+            OUT.neighbours[3] = IN.uv + float2(0.0, _SourceTex_TexelSize.y);
 
             return OUT;
         }
