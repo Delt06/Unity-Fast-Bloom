@@ -17,4 +17,7 @@ Desktop.ini
 /Temp
 /Obj
 /Logs
-/Packages
+/UserSettings
+
+# Artifacts
+/Releases

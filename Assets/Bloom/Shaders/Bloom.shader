@@ -3,8 +3,6 @@ Shader "Hidden/Bloom"
     Properties
     {
         _MainTex ("Bloom", 2D) = "black" {}
-        _SourceTex ("Source", 2D) = "black" {}
-        _NoiseTex ("Noise", 2D) = "grey" {}
     }
 
     SubShader
@@ -115,14 +113,16 @@ Shader "Hidden/Bloom"
 
         Pass
         {
+            NAME "Prefilter"
             CGPROGRAM
             #pragma vertex vert_base
             #pragma fragment frag_prefilter
             ENDCG
         }
 
-        Pass
+        Pass 
         {
+            NAME "Downsample"
             CGPROGRAM
             #pragma vertex vert_blur
             #pragma fragment frag_blur
@@ -131,6 +131,7 @@ Shader "Hidden/Bloom"
 
         Pass
         {
+            NAME "Upsample"
             Blend One One
             CGPROGRAM
             #pragma vertex vert_blur
@@ -140,6 +141,7 @@ Shader "Hidden/Bloom"
 
         Pass
         {
+            NAME "Final"
             CGPROGRAM
             #pragma vertex vert_blur
             #pragma fragment frag_final
@@ -148,6 +150,7 @@ Shader "Hidden/Bloom"
 
         Pass
         {
+            NAME "Combine"
             CGPROGRAM
             #pragma vertex vert_blur
             #pragma fragment frag_combine

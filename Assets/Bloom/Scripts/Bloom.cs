@@ -1,165 +1,186 @@
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.Rendering;
 
 namespace PostEffects
 {
-    public class Bloom
-    {
-        public Bloom (Shader shader)
-        {
-            this.shader = shader;
-        }
+	public class Bloom
+	{
+		private const int PrefilterPass = 0;
+		private const int DownsamplePass = 1;
+		private const int UpsamplePass = 2;
+		private const int FinalPass = 3;
+		private const int CombinePass = 4;
 
-        int mIterations = 8;
-        public int iterations
-        {
-            get { return mIterations; }
-            set
-            {
-                if (value != mIterations)
-                    needResize = true;
-                mIterations = value;
-            }
-        }
+		private static readonly int CurveId = Shader.PropertyToID("_Curve");
+		private static readonly int IntensityId = Shader.PropertyToID("_Intensity");
+		private static readonly int NoiseTexId = Shader.PropertyToID("_NoiseTex");
+		private static readonly int NoiseTexScaleId = Shader.PropertyToID("_NoiseTexScale");
+		private static readonly int SourceTexId = Shader.PropertyToID("_SourceTex");
+		private static readonly int TexelSizeId = Shader.PropertyToID("_TexelSize");
+		private static readonly int ThresholdId = Shader.PropertyToID("_Threshold");
 
-        public float intensity = 0.8f;
-        public float threshold = 0.6f;
-        public float softKnee = 0.7f;
+		private readonly List<RenderTexture> _buffers = new List<RenderTexture>();
+		private BufferParams? _bufferParams;
 
-        bool inited = false;
+		private bool _initialized;
+		private Material _material;
+		private Shader _shader;
 
-        Material material;
-        Shader shader;
-        List<RenderTexture> buffers = new List<RenderTexture>();
-        Vector2Int currentResolution;
-        bool needResize = true;
+		public float Intensity = 0.8f;
+		public float SoftKnee = 0.7f;
+		public float Threshold = 0.6f;
 
-        int _Threshold = Shader.PropertyToID("_Threshold");
-        int _Curve = Shader.PropertyToID("_Curve");
-        int _TexelSize = Shader.PropertyToID("_TexelSize");
-        int _Intensity = Shader.PropertyToID("_Intensity");
-        int _SourceTex = Shader.PropertyToID("_SourceTex");
-        int _NoiseTex = Shader.PropertyToID("_NoiseTex");
-        int _NoiseTexScale = Shader.PropertyToID("_NoiseTexScale");
 
-        const int PREFILTER = 0;
-        const int DOWNSAMPLE = 1;
-        const int UPSAMPLE = 2;
-        const int FINAL = 3;
-        const int COMBINE = 4;
+		public Bloom(Shader shader) => _shader = shader;
 
-        public void Dispose ()
-        {
-            foreach (var rt in buffers)
-            {
-                rt.Release();
-                DestroyFunc(rt);
-            }
-            DestroyFunc(material);
-        }
+		public int Iterations { get; set; } = 8;
 
-        void Init ()
-        {
-            if (inited) return;
-            if (shader == null) return;
-            inited = true;
-            material = CreateMaterial(shader);
-            shader = null;
-        }
+		public void Dispose()
+		{
+			CoreUtils.Destroy(_material);
+			ReleaseBuffers();
+		}
 
-        public void Apply (RenderTexture source, RenderTexture destination, Vector2Int resolution)
-        {
-            Init();
-            if (!inited) return;
+		private void Init()
+		{
+			if (_initialized) return;
+			if (_shader == null) return;
+			_initialized = true;
+			_material = CreateMaterial(_shader);
+			_shader = null;
+		}
 
-            if (currentResolution != resolution)
-            {
-                currentResolution = resolution;
-                needResize = true;
-            }
+		public void Apply(CommandBuffer cmd, RenderTargetIdentifier source, RenderTargetIdentifier destination,
+			Vector2Int resolution, RenderTextureDescriptor destinationDescriptor)
+		{
+			Init();
+			if (!_initialized) return;
 
-            if (needResize)
-            {
-                needResize = false;
-                Resize(destination);
-            }
+			EnsureBuffersAreAllocated(resolution, destinationDescriptor);
 
-            if (buffers.Count < 2) return;
+			cmd.SetGlobalFloat(ThresholdId, Threshold);
+			var knee = Mathf.Max(Threshold * SoftKnee, 0.0001f);
+			var curve = new Vector3(Threshold - knee, knee * 2, 0.25f / knee);
+			cmd.SetGlobalVector(CurveId, curve);
 
-            material.SetFloat(_Threshold, threshold);
-            var knee = Mathf.Max(threshold * softKnee, 0.0001f);
-            var curve = new Vector3(threshold - knee, knee * 2, 0.25f / knee);
-            material.SetVector(_Curve, curve);
+			var last = new Buffer
+			{
+				Id = destination,
+				TexelSize = GetTexelSize(resolution),
+			};
+			cmd.Blit(source, last.Id, _material, PrefilterPass);
 
-            var last = destination;
-            Graphics.Blit(source, last, material, PREFILTER);
+			foreach (var dest in _buffers)
+			{
+				cmd.SetGlobalVector(TexelSizeId, last.TexelSize);
+				cmd.Blit(last.Id, dest, _material, DownsamplePass);
+				last = new Buffer
+				{
+					Id = dest,
+					TexelSize = dest.texelSize,
+				};
+			}
 
-            foreach (var dest in buffers)
-            {
-                material.SetVector(_TexelSize, last.texelSize);
-                Graphics.Blit(last, dest, material, DOWNSAMPLE);
-                last = dest;
-            }
+			for (var i = _buffers.Count - 2; i >= 0; i--)
+			{
+				var dest = _buffers[i];
+				cmd.SetGlobalVector(TexelSizeId, last.TexelSize);
+				cmd.Blit(last.Id, dest, _material, UpsamplePass);
+				last = new Buffer
+				{
+					Id = dest,
+					TexelSize = dest.texelSize,
+				};
+			}
 
-            for (int i = buffers.Count - 2; i >= 0; i--)
-            {
-                var dest = buffers[i];
-                material.SetVector(_TexelSize, last.texelSize);
-                Graphics.Blit(last, dest, material, UPSAMPLE);
-                last.DiscardContents();
-                last = dest;
-            }
+			cmd.SetGlobalFloat(IntensityId, Intensity);
+			cmd.SetGlobalVector(TexelSizeId, last.TexelSize);
+			cmd.Blit(last.Id, destination, _material, FinalPass);
+		}
 
-            material.SetFloat(_Intensity, intensity);
-            material.SetVector(_TexelSize, last.texelSize);
-            Graphics.Blit(last, destination, material, FINAL);
-            last.DiscardContents();
-        }
+		private static Vector2 GetTexelSize(Vector2Int resolution) => new Vector2(1f / resolution.x, 1f / resolution.y);
 
-        public void Combine (RenderTexture source, RenderTexture destination, RenderTexture bloom, Texture2D noise)
-        {
-            material.SetTexture(_SourceTex, source);
-            material.SetTexture(_NoiseTex, noise);
-            material.SetVector(_NoiseTexScale, RenderTextureUtils.GetTextureScreenScale(noise));
-            Graphics.Blit(bloom, destination, material, COMBINE);
-        }
+		private void EnsureBuffersAreAllocated(Vector2Int resolution, in RenderTextureDescriptor destinationDescriptor)
+		{
+			var needToAllocate = false;
 
-        void Resize (RenderTexture target)
-        {
-            foreach (var rt in buffers)
-            {
-                rt.Release();
-                DestroyFunc(rt);
-            }
-            buffers.Clear();
+			if (_bufferParams == null)
+			{
+				needToAllocate = true;
+			}
+			else
+			{
+				var bufferParams = _bufferParams.Value;
+				if (bufferParams.Iterations != Iterations ||
+				    bufferParams.Resolution != resolution ||
+				    !Ext.MainDescParametersMatch(bufferParams.DestinationDescriptor, destinationDescriptor))
+				{
+					ReleaseBuffers();
+					needToAllocate = true;
+				}
+			}
 
-            for (int i = 0; i < iterations; i++)
-            {
-                int w = target.width >> (i + 1);
-                int h = target.height >> (i + 1);
+			if (!needToAllocate) return;
 
-                if (w < 2 || h < 2) break;
+			_buffers.Clear();
+			for (var i = 0; i < Iterations; i++)
+			{
+				var w = resolution.x >> (i + 1);
+				var h = resolution.y >> (i + 1);
 
-                var rt = new RenderTexture(w, h, 0, target.format);
-                rt.filterMode = FilterMode.Bilinear;
-                rt.wrapMode = target.wrapMode;
-                buffers.Add(rt);
-            }
-        }
+				if (w < 2 || h < 2) break;
 
-        void DestroyFunc (Object obj)
-        {
-            if (Application.isPlaying)
-                Object.Destroy(obj);
-            else
-                Object.DestroyImmediate(obj);
-        }
+				var desc = new RenderTextureDescriptor(w, h, destinationDescriptor.colorFormat, 0, 0);
+				var rt = RenderTexture.GetTemporary(desc);
+				rt.filterMode = FilterMode.Bilinear;
+				_buffers.Add(rt);
+			}
 
-        Material CreateMaterial (Shader shader)
-        {
-            var material = new Material(shader);
-            material.hideFlags = HideFlags.HideAndDontSave;
-            return material;
-        }
-    }
+			_bufferParams = new BufferParams
+			{
+				Iterations = Iterations,
+				DestinationDescriptor = destinationDescriptor,
+				Resolution = resolution,
+			};
+		}
+
+		private void ReleaseBuffers()
+		{
+			foreach (var buffer in _buffers)
+			{
+				RenderTexture.ReleaseTemporary(buffer);
+			}
+
+			_buffers.Clear();
+		}
+
+		public void Combine(CommandBuffer cmd, RenderTargetIdentifier source, RenderTargetIdentifier destination,
+			RenderTargetIdentifier bloom, Texture2D noise)
+		{
+			cmd.SetGlobalTexture(NoiseTexId, noise);
+			cmd.SetGlobalVector(NoiseTexScaleId, RenderTextureUtils.GetTextureScreenScale(noise));
+			cmd.SetGlobalTexture(SourceTexId, source);
+			cmd.Blit(bloom, destination, _material, CombinePass);
+		}
+
+		private static Material CreateMaterial(Shader s) =>
+			new Material(s)
+			{
+				hideFlags = HideFlags.HideAndDontSave,
+			};
+
+		private struct Buffer
+		{
+			public RenderTargetIdentifier Id;
+			public Vector2 TexelSize;
+		}
+
+		private struct BufferParams
+		{
+			public Vector2Int Resolution;
+			public int Iterations;
+			public RenderTextureDescriptor DestinationDescriptor;
+		}
+	}
 }
